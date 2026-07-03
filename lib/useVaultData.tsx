@@ -49,13 +49,21 @@ export function useVaultData(vaultId: string): VaultData {
     setLoading(true);
     setError(null);
 
-    Promise.all([
-      readVault(vaultId),
-      readEvidenceArchive(vaultId),
-      readMemoryTraces(vaultId),
-      readLatestInscription(vaultId),
-      readFractures(vaultId),
-    ])
+    // Fetch the vault first so we know whether it has an inscription yet —
+    // calling get_latest_inscription before one exists makes the contract
+    // raise, which genlayer-js logs to console even though we catch it, so
+    // skipping the call entirely avoids alarming (but harmless) console
+    // noise on every freshly created vault.
+    readVault(vaultId)
+      .then((v) =>
+        Promise.all([
+          v,
+          readEvidenceArchive(vaultId),
+          readMemoryTraces(vaultId),
+          v.latestInscriptionId ? readLatestInscription(vaultId) : Promise.resolve(null),
+          readFractures(vaultId),
+        ])
+      )
       .then(([v, ev, mem, insc, frac]) => {
         if (cancelled) return;
         setVault(v);
