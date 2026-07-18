@@ -631,7 +631,7 @@ the JSON object, no markdown fences, no commentary.
             "outputs to be textually identical."
         )
 
-        raw = gl.eq_principle.prompt_comparative(call_validators, principle).get()
+        raw = gl.eq_principle.prompt_comparative(call_validators, principle)
         if isinstance(raw, str):
             raw = json.loads(raw)
 
@@ -818,7 +818,7 @@ object, no markdown fences, no commentary.
             "textually identical."
         )
 
-        raw = gl.eq_principle.prompt_comparative(call_validators, principle).get()
+        raw = gl.eq_principle.prompt_comparative(call_validators, principle)
         if isinstance(raw, str):
             raw = json.loads(raw)
 
