@@ -91,20 +91,30 @@ exactly as before. No other logic changed.
 
 ---
 
-## 5. Action Required — Redeploy
+## 5. Redeployment — Completed
 
-This is a change to the **contract source**, so it must be **redeployed** to take
-effect on-chain. The previously deployed address still holds the old (buggy)
-bytecode and will continue to raise the `TypeError` until replaced.
+The corrected contract has been **redeployed** to GenLayer Studio (chain 61999):
 
-After redeploying the corrected contract:
+| | |
+| --- | --- |
+| **New contract address** | `0x718383c99e06b411a08FFffAdF5429477477fA5B` |
+| **Previous (buggy) address** | `0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819` — retired |
+| **Network** | GenLayer StudioNet, chain ID 61999 |
+| **RPC** | `https://studio.genlayer.com/api` |
+| **Live frontend** | https://epitaph-two.vercel.app |
 
-1. Copy the new deployed contract address.
-2. Update `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` in `.env.local` with that address.
-3. Restart the dev server so the frontend points at the corrected deployment.
+Post-redeploy verification:
 
-Once redeployed, `request_legacy_inscription` and `resolve_fracture` execute their
-equivalence-principle consensus without crashing.
+- A live `read_contract` call (`get_vault_count`) against the new address via
+  genlayer-js succeeds, confirming the contract is deployed and responding.
+- The Vercel production environment variable
+  `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` was updated to the new address and a
+  fresh production deployment was published; the new address is confirmed
+  present in the served JS bundle, with no references to the old address.
+
+With the corrected bytecode on-chain, `request_legacy_inscription` and
+`resolve_fracture` execute their equivalence-principle consensus without
+crashing.
 
 ---
 
