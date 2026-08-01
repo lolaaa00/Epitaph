@@ -107,10 +107,31 @@ Post-redeploy verification:
 
 - A live `read_contract` call (`get_vault_count`) against the new address via
   genlayer-js succeeds, confirming the contract is deployed and responding.
+- **Deployed source pulled directly from each address via `client.getContractCode()`
+  and diffed for the bug pattern:**
+
+  | Address | Deployed source length | Contains `.get()` bug |
+  | --- | --- | --- |
+  | `0x842d...8819` (old, retired) | 37,250 chars | **Yes** — bug still present in the retired deployment |
+  | `0x718383...fA5B` (current) | 37,238 chars | **No** — both `prompt_comparative` call sites confirmed clean on-chain |
+
+- Full write-path test executed live against the new address: `create_legacy_vault`
+  → `request_legacy_inscription` (consensus produced `PRESERVE_WITH_CONTEXT`,
+  impact 48, confidence 34, no `TypeError`) → `open_fracture` →
+  `resolve_fracture` (consensus produced `ADD_COUNTER_CONTEXT`, confidence
+  correctly adjusted, vault reached `RECONCILED`, no `TypeError`). Both
+  non-deterministic consensus flows confirmed working end-to-end on-chain.
 - The Vercel production environment variable
   `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` was updated to the new address and a
   fresh production deployment was published; the new address is confirmed
   present in the served JS bundle, with no references to the old address.
+- **`README.md` previously still listed the old, retired address in three
+  places** (live-deployment section, `.env.local` example, redeploy
+  instructions) despite the frontend and Vercel already pointing at the new
+  one. This has been corrected — every address reference in the repo now
+  points at `0x718383...fA5B`, and the redeploy instructions now explicitly
+  call out updating `.env.local`, Vercel, and the README together so no stale
+  address is left pointing at retired bytecode.
 
 With the corrected bytecode on-chain, `request_legacy_inscription` and
 `resolve_fracture` execute their equivalence-principle consensus without

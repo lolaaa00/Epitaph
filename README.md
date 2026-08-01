@@ -9,9 +9,9 @@ Frontend and GenLayer Intelligent Contract only — no backend, no database. The
 
 ## Live deployment
 
-- Contract address: `0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819`
+- Contract address: `0x718383c99e06b411a08FFffAdF5429477477fA5B`
 - Network: GenLayer Studio Network (chain `61999`)
-- Explorer: https://explorer-studio.genlayer.com/address/0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819
+- Explorer: https://explorer-studio.genlayer.com/address/0x718383c99e06b411a08FFffAdF5429477477fA5B
 
 ## Stack
 
@@ -33,7 +33,7 @@ Open [http://localhost:3000](http://localhost:3000). Connect an injected wallet 
 Create `.env.local` in the project root:
 
 ```bash
-NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS=0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819
+NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS=0x718383c99e06b411a08FFffAdF5429477477fA5B
 ```
 
 This is the only environment variable the app requires. It's public (`NEXT_PUBLIC_*`) since it's just the deployed contract address, not a secret.
@@ -57,4 +57,4 @@ npx genlayer network set studionet
 npx genlayer deploy --contract contracts/EpitaphLegacyProtocol.py
 ```
 
-Then update `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` with the new address.
+Then update `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` **everywhere it's referenced** — `.env.local`, the Vercel project's environment variables (then redeploy), and this README — so no stale address is left pointing at retired bytecode. See `information.md` for the redeploy history and on-chain verification of the currently live contract.
