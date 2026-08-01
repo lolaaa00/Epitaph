@@ -133,6 +133,50 @@ Post-redeploy verification:
   call out updating `.env.local`, Vercel, and the README together so no stale
   address is left pointing at retired bytecode.
 
+## 7. Full Repo Audit (post-rejection)
+
+Following the rejection, a complete re-audit was performed against the
+GenLayer builder documentation and the live deployed contract, rather than
+relying on prior context. Findings:
+
+- **Deployed bytecode verified byte-for-byte against local source.** Pulled
+  the contract source directly from `0x718383...fA5B` via
+  `client.getContractCode()` and diffed it against
+  `contracts/EpitaphLegacyProtocol.py` — exact match (37,238 chars both
+  sides), confirming the deployed contract is genuinely the corrected
+  version and not stale.
+- **No other bare `.get()` calls exist anywhere in the contract.** Every
+  `.get()` invocation in the file (on `TreeMap`s and on the LLM-returned
+  `dict`) now takes an explicit key/default argument.
+- **Found and fixed a second, related bug in the frontend** (not the
+  contract): `lib/contract.ts`'s write-failure detection checked
+  `receipt.statusName` / `receipt.txExecutionResultName` — fields that do
+  not exist on the real GenLayer transaction receipt. The actual receipt
+  uses snake_case (`status_name`, `result_name`), and — critically — a
+  contract call that raises an exception can still show a top-level
+  `status_name` of `ACCEPTED` and `result_name` of `MAJORITY_AGREE` (since
+  validators unanimously agreeing "this call errors" is itself a valid
+  consensus outcome). The real signal is nested at
+  `consensus_data.leader_receipt[].execution_result`, confirmed
+  empirically on live Studio transactions: `"SUCCESS"` for a working call,
+  `"ERROR"` (with a Python traceback in `genvm_result.stderr`) for one that
+  raises. This means that if a contract-level exception like the original
+  `.get()` bug had recurred, **the frontend would have silently reported
+  success and shown no error to the user.** Fixed in
+  [lib/contract.ts](lib/contract.ts) to read the correct fields and surface
+  the actual on-chain error message.
+- **Verified the fix against real transactions on the live contract**, not
+  just theoretically: forced a real on-chain `ValueError` (calling
+  `submit_memory` against a nonexistent vault) and confirmed the corrected
+  detection logic flags it as failed with the traceback surfaced; then ran
+  a real successful `create_legacy_vault` and confirmed it is not
+  incorrectly flagged. Both cases passed.
+- **Cross-checked every contract dataclass field against the frontend
+  formatters** (`lib/formatters.ts`) and every read/write method name
+  against `lib/constants.ts`'s `CONTRACT_METHODS` map — all field names and
+  method signatures match exactly.
+- `npm run lint` and `npm run build` both clean after all fixes.
+
 With the corrected bytecode on-chain, `request_legacy_inscription` and
 `resolve_fracture` execute their equivalence-principle consensus without
 crashing.

@@ -55,6 +55,28 @@ const FAILURE_STATUS_NAMES = new Set([
   "VALIDATORS_TIMEOUT",
 ]);
 
+// The real GenLayer receipt object uses snake_case keys (status_name,
+// result_name), not the camelCase names the SDK's TS types suggest — and
+// crucially, even a call that *raised inside the contract* (e.g. a Python
+// exception) can still show a top-level status_name of ACCEPTED and a
+// result_name of MAJORITY_AGREE, because validators unanimously agreeing
+// "this call errors" is itself a valid consensus outcome. The only place
+// that actually reflects whether contract execution succeeded is each
+// round's consensus_data.leader_receipt[].execution_result. Confirmed
+// empirically against a live Studio deployment: a successful call reports
+// execution_result "SUCCESS" for every leader receipt, while a call that
+// raises reports "ERROR" with a Python traceback in genvm_result.stderr.
+interface LeaderReceiptEntry {
+  execution_result?: string;
+  genvm_result?: { stderr?: string };
+}
+
+interface GenLayerReceiptShape {
+  status_name?: string;
+  result_name?: string;
+  consensus_data?: { leader_receipt?: LeaderReceiptEntry[] };
+}
+
 async function write(functionName: string, args: unknown[]): Promise<WriteResult> {
   const client = getWriteClient();
   const address = requireContractAddress();
@@ -78,20 +100,24 @@ async function write(functionName: string, args: unknown[]): Promise<WriteResult
     })
   );
 
-  const receiptInfo = receipt as {
-    statusName?: string;
-    txExecutionResultName?: string;
-  };
+  const receiptInfo = receipt as unknown as GenLayerReceiptShape;
   console.debug("[epitaph:receipt]", functionName, receiptInfo);
 
-  if (receiptInfo.statusName && FAILURE_STATUS_NAMES.has(receiptInfo.statusName)) {
+  if (receiptInfo.status_name && FAILURE_STATUS_NAMES.has(receiptInfo.status_name)) {
     throw new Error(
-      `Transaction for "${functionName}" did not reach consensus (status: ${receiptInfo.statusName}). Nothing was written to the vault — please retry.`
+      `Transaction for "${functionName}" did not reach consensus (status: ${receiptInfo.status_name}). Nothing was written to the vault — please retry.`
     );
   }
-  if (receiptInfo.txExecutionResultName === "FINISHED_WITH_ERROR") {
+
+  const leaderReceipts = receiptInfo.consensus_data?.leader_receipt ?? [];
+  const failedReceipt = leaderReceipts.find(
+    (entry) => entry.execution_result && entry.execution_result !== "SUCCESS"
+  );
+  if (failedReceipt) {
+    const stderrTail = failedReceipt.genvm_result?.stderr?.trim().split("\n").slice(-1)[0];
     throw new Error(
-      `Contract rejected "${functionName}": execution failed on-chain. Check submitted values against contract constraints and retry.`
+      `Contract rejected "${functionName}": execution failed on-chain (${failedReceipt.execution_result}).` +
+        (stderrTail ? ` ${stderrTail}` : " Check submitted values against contract constraints and retry.")
     );
   }
 
