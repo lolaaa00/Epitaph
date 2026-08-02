@@ -1,8 +1,10 @@
 # EPITAPH — Response to Team Review
 
 **Project:** EPITAPH — GenLayer Legacy Preservation Protocol
-**Date:** 2026-07-18
-**Scope of this document:** Fix applied in response to the post-submission review of the Intelligent Contract's equivalence-principle consensus logic.
+**Scope of this document:** a running log of the two rounds of fixes applied
+in response to team review — the original `TypeError` crash in the
+equivalence-principle consensus logic, and a subsequent, more substantial
+fix to how the contract verifies submitted evidence.
 
 ---
 
@@ -77,27 +79,26 @@ exactly as before. No other logic changed.
 | `request_legacy_inscription` | `contracts/EpitaphLegacyProtocol.py:634` |
 | `resolve_fracture` | `contracts/EpitaphLegacyProtocol.py:821` |
 
+(Line numbers as of the first fix. Both methods have since moved and grown —
+see §8 — but the same fix remains in place.)
+
 ---
 
-## 4. Verification
+## 4. Verification (first fix)
 
 - `python3 -m py_compile contracts/EpitaphLegacyProtocol.py` → passes (syntax clean).
-- Confirmed via `grep` that **no** `.get()` call remains on any `prompt_comparative`
-  result:
-  ```
-  634:  raw = gl.eq_principle.prompt_comparative(call_validators, principle)
-  821:  raw = gl.eq_principle.prompt_comparative(call_validators, principle)
-  ```
+- Confirmed via `grep` that **no** `.get()` call remained on any `prompt_comparative`
+  result.
 
 ---
 
-## 5. Redeployment — Completed
+## 5. First Redeployment — Completed
 
-The corrected contract has been **redeployed** to GenLayer Studio (chain 61999):
+The corrected contract was redeployed to GenLayer Studio (chain 61999):
 
 | | |
 | --- | --- |
-| **New contract address** | `0x718383c99e06b411a08FFffAdF5429477477fA5B` |
+| **New contract address (at the time)** | `0x718383c99e06b411a08FFffAdF5429477477fA5B` — **retired, see §8** |
 | **Previous (buggy) address** | `0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819` — retired |
 | **Network** | GenLayer StudioNet, chain ID 61999 |
 | **RPC** | `https://studio.genlayer.com/api` |
@@ -106,32 +107,46 @@ The corrected contract has been **redeployed** to GenLayer Studio (chain 61999):
 Post-redeploy verification:
 
 - A live `read_contract` call (`get_vault_count`) against the new address via
-  genlayer-js succeeds, confirming the contract is deployed and responding.
+  genlayer-js succeeded, confirming the contract was deployed and responding.
 - **Deployed source pulled directly from each address via `client.getContractCode()`
   and diffed for the bug pattern:**
 
   | Address | Deployed source length | Contains `.get()` bug |
   | --- | --- | --- |
   | `0x842d...8819` (old, retired) | 37,250 chars | **Yes** — bug still present in the retired deployment |
-  | `0x718383...fA5B` (current) | 37,238 chars | **No** — both `prompt_comparative` call sites confirmed clean on-chain |
+  | `0x718383...fA5B` (retired, see §8) | 37,238 chars | **No** — both `prompt_comparative` call sites confirmed clean on-chain |
 
-- Full write-path test executed live against the new address: `create_legacy_vault`
+- Full write-path test executed live against that address: `create_legacy_vault`
   → `request_legacy_inscription` (consensus produced `PRESERVE_WITH_CONTEXT`,
   impact 48, confidence 34, no `TypeError`) → `open_fracture` →
   `resolve_fracture` (consensus produced `ADD_COUNTER_CONTEXT`, confidence
   correctly adjusted, vault reached `RECONCILED`, no `TypeError`). Both
   non-deterministic consensus flows confirmed working end-to-end on-chain.
 - The Vercel production environment variable
-  `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS` was updated to the new address and a
-  fresh production deployment was published; the new address is confirmed
-  present in the served JS bundle, with no references to the old address.
-- **`README.md` previously still listed the old, retired address in three
+  `NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS`, `.env.local`, and the README were
+  all updated to that address at the time.
+- **`README.md` had briefly still listed the old, retired address in three
   places** (live-deployment section, `.env.local` example, redeploy
   instructions) despite the frontend and Vercel already pointing at the new
-  one. This has been corrected — every address reference in the repo now
-  points at `0x718383...fA5B`, and the redeploy instructions now explicitly
-  call out updating `.env.local`, Vercel, and the README together so no stale
-  address is left pointing at retired bytecode.
+  one. This was corrected, and the redeploy instructions were updated to
+  explicitly call out updating `.env.local`, Vercel, and the README together
+  so no stale address is left pointing at retired bytecode.
+
+---
+
+## 6. Notes on the Equivalence Principle (unchanged, for context)
+
+The two consensus methods intentionally use `gl.eq_principle.prompt_comparative`
+with a natural-language `principle`, rather than strict JSON equality, so that
+validators agree on the **essential fields** (recommendation, controversy band,
+score ranges, resolution category, effect direction) while tolerating differences
+in wording and phrasing. That design was not affected by the `.get()` fix in §3 —
+only the incorrect `.get()` invocation on the return value was removed. It was
+not affected by the Gate D fetch fix in §8 either — the equivalence principle
+prose itself is unchanged; only the evidence fed into the prompt is now partly
+contract-verified.
+
+---
 
 ## 7. Full Repo Audit (post-rejection)
 
@@ -140,14 +155,13 @@ GenLayer builder documentation and the live deployed contract, rather than
 relying on prior context. Findings:
 
 - **Deployed bytecode verified byte-for-byte against local source.** Pulled
-  the contract source directly from `0x718383...fA5B` via
+  the contract source directly from the then-live address via
   `client.getContractCode()` and diffed it against
-  `contracts/EpitaphLegacyProtocol.py` — exact match (37,238 chars both
-  sides), confirming the deployed contract is genuinely the corrected
-  version and not stale.
-- **No other bare `.get()` calls exist anywhere in the contract.** Every
+  `contracts/EpitaphLegacyProtocol.py` — exact match, confirming the deployed
+  contract was genuinely the corrected version and not stale.
+- **No other bare `.get()` calls existed anywhere in the contract.** Every
   `.get()` invocation in the file (on `TreeMap`s and on the LLM-returned
-  `dict`) now takes an explicit key/default argument.
+  `dict`) takes an explicit key/default argument.
 - **Found and fixed a second, related bug in the frontend** (not the
   contract): `lib/contract.ts`'s write-failure detection checked
   `receipt.statusName` / `receipt.txExecutionResultName` — fields that do
@@ -166,35 +180,20 @@ relying on prior context. Findings:
   [lib/contract.ts](lib/contract.ts) to read the correct fields and surface
   the actual on-chain error message.
 - **Verified the fix against real transactions on the live contract**, not
-  just theoretically: forced a real on-chain `ValueError` (calling
-  `submit_memory` against a nonexistent vault) and confirmed the corrected
-  detection logic flags it as failed with the traceback surfaced; then ran
-  a real successful `create_legacy_vault` and confirmed it is not
-  incorrectly flagged. Both cases passed.
+  just theoretically: forced a real on-chain error (calling `submit_memory`
+  against a nonexistent vault) and confirmed the corrected detection logic
+  flags it as failed with the traceback surfaced; then ran a real
+  successful `create_legacy_vault` and confirmed it is not incorrectly
+  flagged. Both cases passed.
 - **Cross-checked every contract dataclass field against the frontend
   formatters** (`lib/formatters.ts`) and every read/write method name
   against `lib/constants.ts`'s `CONTRACT_METHODS` map — all field names and
-  method signatures match exactly.
+  method signatures matched exactly.
 - `npm run lint` and `npm run build` both clean after all fixes.
 
-With the corrected bytecode on-chain, `request_legacy_inscription` and
-`resolve_fracture` execute their equivalence-principle consensus without
-crashing.
-
 ---
 
-## 6. Notes on the Equivalence Principle (unchanged, for context)
-
-The two consensus methods intentionally use `gl.eq_principle.prompt_comparative`
-with a natural-language `principle`, rather than strict JSON equality, so that
-validators agree on the **essential fields** (recommendation, controversy band,
-score ranges, resolution category, effect direction) while tolerating differences
-in wording and phrasing. That design was not affected by this fix — only the
-incorrect `.get()` invocation on the return value was removed.
-
----
-
-## 7. Second Redeploy — 2026-08-02 (Gate D evidence-verification fix)
+## 8. Second Redeploy — Gate D Evidence-Verification Fix
 
 A subsequent audit against GenLayer's project submission guidance surfaced
 a separate, more substantial issue: the contract treated every submitted
@@ -219,7 +218,7 @@ submissions.
 
 Two smaller hardening fixes went in alongside it:
 
-- All 30 `raise ValueError(...)` call sites converted to
+- All `raise ValueError(...)` call sites converted to
   `raise gl.vm.UserError(...)`, matching the documented GenLayer pattern
   (verified against the real SDK docs, not guessed).
 - Added `_parse_model_json()`: strips markdown fences and recovers the
@@ -227,8 +226,9 @@ Two smaller hardening fixes went in alongside it:
   ignores the "no markdown fences" instruction doesn't crash the whole
   consensus round with an unhandled `JSONDecodeError`.
 
-**New deployed address:** `0x1320efcEed8c325E432d24CA40A0835B742e87af`
-(previous address `0x718383c99e06b411a08FFffAdF5429477477fA5B` retired).
+**Current deployed address:** `0x1320efcEed8c325E432d24CA40A0835B742e87af`
+(supersedes `0x718383c99e06b411a08FFffAdF5429477477fA5B`, which supersedes
+`0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819` — both retired).
 
 **Verification performed, in order:**
 
@@ -251,10 +251,10 @@ Two smaller hardening fixes went in alongside it:
    in a mocked test. Then opened and resolved a fracture against that
    inscription (the second consensus path) — resolved `UPHOLD_ORIGINAL`,
    vault reached `RECONCILED`. Full transcript in `README.md`.
-6. `.env.local`, the Vercel production environment variable, and this
-   README's "Deployed contract" section all updated to the new address; a
-   fresh production deployment published and confirmed to serve the new
-   address with zero references to the retired one.
+6. `.env.local`, the Vercel production environment variable, and the
+   README's "Deployed contract" section were all updated to the new
+   address; a fresh production deployment was published and confirmed to
+   serve the new address with zero references to either retired address.
 
 Full technical writeup, including the quoted equivalence-principle prose
 and the architecture rationale, is in `README.md`. The idea-selection
