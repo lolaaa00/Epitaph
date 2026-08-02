@@ -5,6 +5,7 @@ import { useWallet } from "@/lib/useWallet";
 import { resolveFracture } from "@/lib/contract";
 import type { FractureRecord } from "@/lib/formatters";
 import { TxHashLink } from "@/components/chain/TxHashLink";
+import { ConsensusProgress } from "@/components/chain/ConsensusProgress";
 import { truncateHash } from "@/lib/formatters";
 
 export function FractureCard({
@@ -18,6 +19,7 @@ export function FractureCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
 
   const canResolve = fracture.status === "OPEN" || fracture.status === "UNDER_REVIEW";
 
@@ -29,13 +31,15 @@ export function FractureCard({
     }
     try {
       setBusy(true);
-      const result = await resolveFracture(fracture.fractureId);
+      setPendingHash(null);
+      const result = await resolveFracture(fracture.fractureId, (hash) => setPendingHash(hash));
       setTxHash(result.txHash);
       onResolved?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to resolve fracture.");
     } finally {
       setBusy(false);
+      setPendingHash(null);
     }
   }
 
@@ -79,8 +83,13 @@ export function FractureCard({
           >
             {address ? (busy ? "Validators adjudicating…" : "Resolve via Consensus") : "Connect Wallet"}
           </button>
-          {error && <p className="font-mono text-xs text-rust-2">{error}</p>}
-          {txHash && <TxHashLink hash={txHash} label="Resolved ·" />}
+          {error && (
+            <p role="alert" className="font-mono text-xs text-rust-2">
+              {error}
+            </p>
+          )}
+          {busy && <ConsensusProgress txHash={pendingHash} />}
+          {!busy && txHash && <TxHashLink hash={txHash} label="Resolved ·" />}
         </div>
       )}
     </div>

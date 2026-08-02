@@ -67,6 +67,31 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Deliberate focus treatment: visible only for keyboard navigation
+   (:focus-visible), matching the palette rather than the browser default,
+   so the app is operable without a mouse without looking accidental. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--gold-2, #c9a86a);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Archival grain overlay */
 .grain-overlay {
   position: fixed;

@@ -130,7 +130,7 @@ export function EvidenceForm({
       </fieldset>
 
       {error && (
-        <p className="font-mono text-xs text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-3 py-2">
+        <p role="alert" className="font-mono text-xs text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-3 py-2">
           {error}
         </p>
       )}

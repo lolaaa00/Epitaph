@@ -1,0 +1,14 @@
+networks:
+  default: studionet
+  studionet:
+    default_wait_interval: 5000
+    default_wait_retries: 100
+  localnet:
+    default_wait_interval: 2000
+    default_wait_retries: 50
+
+paths:
+  contracts: contracts
+  artifacts: artifacts
+
+environment: .env

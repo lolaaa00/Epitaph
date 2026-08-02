@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify-schema": "node scripts/verify-schema.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

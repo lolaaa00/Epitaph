@@ -34,7 +34,7 @@ export default function VaultsPage() {
       </p>
 
       {error && (
-        <p className="font-mono text-sm text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-4 py-3 max-w-xl">
+        <p role="alert" className="font-mono text-sm text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-4 py-3 max-w-xl">
           {error}
         </p>
       )}

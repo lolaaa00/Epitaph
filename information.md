@@ -191,3 +191,72 @@ validators agree on the **essential fields** (recommendation, controversy band,
 score ranges, resolution category, effect direction) while tolerating differences
 in wording and phrasing. That design was not affected by this fix — only the
 incorrect `.get()` invocation on the return value was removed.
+
+---
+
+## 7. Second Redeploy — 2026-08-02 (Gate D evidence-verification fix)
+
+A subsequent audit against GenLayer's project submission guidance surfaced
+a separate, more substantial issue: the contract treated every submitted
+`source_ref` URL as trustworthy without ever fetching it — the model only
+ever saw the submitter's *claim* about what a source contained, never the
+source itself. This is the "stable URL content treated as proof of
+ownership" failure pattern GenLayer reviewers have flagged on other
+submissions.
+
+**Fixed** by adding real contract-side fetching:
+
+- Both `request_legacy_inscription` and `resolve_fracture` now call
+  `gl.nondet.web.get(url)` on up to 3 http(s) `source_ref` values, from
+  inside the leader closure (required, since it's itself a non-deterministic
+  operation subject to the same lexical-nesting rule as `exec_prompt`).
+- The prompt explicitly instructs validators to weigh a successful
+  contract-fetched confirmation above an identical but unverified submitter
+  claim, and to treat a failed fetch as *unverified*, never as proof of
+  falsity.
+- Non-http(s) references (e.g. `ipfs://`) are labeled as not attempted
+  rather than silently ignored.
+
+Two smaller hardening fixes went in alongside it:
+
+- All 30 `raise ValueError(...)` call sites converted to
+  `raise gl.vm.UserError(...)`, matching the documented GenLayer pattern
+  (verified against the real SDK docs, not guessed).
+- Added `_parse_model_json()`: strips markdown fences and recovers the
+  outermost `{...}` before parsing model output, so a validator that
+  ignores the "no markdown fences" instruction doesn't crash the whole
+  consensus round with an unhandled `JSONDecodeError`.
+
+**New deployed address:** `0x1320efcEed8c325E432d24CA40A0835B742e87af`
+(previous address `0x718383c99e06b411a08FFffAdF5429477477fA5B` retired).
+
+**Verification performed, in order:**
+
+1. `python3 -m py_compile` — syntax clean.
+2. 33 direct-mode tests written against `gltest`'s real (not mocked-out)
+   Foundry-style simulator fixtures (`direct_vm`, `mock_llm`, `mock_web`,
+   `expect_revert`) — all 33 passing, actually executed, including cases
+   for fenced/commentary-wrapped model output, successful fetch, and failed
+   fetch. See `tests/direct/test_epitaph_protocol.py`.
+3. Deployed via `genlayer deploy` — 5/5 validators voted `AGREE`,
+   `result_name: MAJORITY_AGREE`, `status_name: ACCEPTED`.
+4. `scripts/verify-schema.mjs` against the new address — all 21 frontend
+   call sites (7 writes, 14 reads) match the live schema exactly.
+5. `scripts/live-verify.mjs` — a real, executed, unmocked end-to-end run
+   against the new address on Studio: created a vault with a genuinely
+   fetchable GitHub-hosted `source_ref`, requested an inscription, and the
+   model's own returned `reasoning_summary` explicitly cited *"the contract
+   directly fetched the cited GitHub README with HTTP 200"* as the reason
+   for its confidence — proving the fix works on real consensus, not only
+   in a mocked test. Then opened and resolved a fracture against that
+   inscription (the second consensus path) — resolved `UPHOLD_ORIGINAL`,
+   vault reached `RECONCILED`. Full transcript in `README.md`.
+6. `.env.local`, the Vercel production environment variable, and this
+   README's "Deployed contract" section all updated to the new address; a
+   fresh production deployment published and confirmed to serve the new
+   address with zero references to the retired one.
+
+Full technical writeup, including the quoted equivalence-principle prose
+and the architecture rationale, is in `README.md`. The idea-selection
+rationale and an honest self-audit of what this project does and doesn't
+cover across GenLayer's capability surface is in `DECISION_RECORD.md`.

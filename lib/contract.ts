@@ -22,6 +22,27 @@ export interface WriteResult {
   txHash: `0x${string}`;
 }
 
+/**
+ * Best-effort read of a transaction's current stage (PROPOSING, COMMITTING,
+ * REVEALING, ACCEPTED, FINALIZED, ...). Used purely for UI progress display
+ * while a write's own waitForTransactionReceipt() call is still in flight —
+ * never for correctness decisions. Returns null on any error, including
+ * "not found yet" right after submission, so callers should treat null as
+ * "still pending" rather than a failure.
+ */
+export async function fetchTransactionStatusName(txHash: string): Promise<string | null> {
+  try {
+    const client = getReadClient();
+    const tx = await client.getTransaction({
+      hash: txHash as unknown as Parameters<typeof client.getTransaction>[0]["hash"],
+    });
+    const info = tx as unknown as { status_name?: string; status?: string };
+    return info.status_name ?? info.status ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function requireContractAddress(): `0x${string}` {
   if (!CONTRACT_ADDRESS) {
     throw new Error(
@@ -77,7 +98,11 @@ interface GenLayerReceiptShape {
   consensus_data?: { leader_receipt?: LeaderReceiptEntry[] };
 }
 
-async function write(functionName: string, args: unknown[]): Promise<WriteResult> {
+async function write(
+  functionName: string,
+  args: unknown[],
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
   const client = getWriteClient();
   const address = requireContractAddress();
   logRpcCall("write", functionName, args, address);
@@ -89,6 +114,10 @@ async function write(functionName: string, args: unknown[]): Promise<WriteResult
       value: 0n,
     })
   );
+  // Surface the hash immediately so the UI can start showing live consensus
+  // progress (PROPOSING/COMMITTING/REVEALING/...) instead of waiting for
+  // the whole multi-minute wait below to resolve before showing anything.
+  onSubmitted?.(txHash as string);
   // Studio Network consensus rounds can take a while under load, so a
   // generous interval/retry budget (~5 minutes total) is used instead of
   // the client default so slow finalization isn't mistaken for failure.
@@ -140,96 +169,127 @@ async function read<T>(functionName: string, args: unknown[] = []): Promise<T> {
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-export async function createLegacyVault(input: {
-  vaultId: string;
-  personName: string;
-  lifePeriod: string;
-  identityLine: string;
-  initialClaim: string;
-  submitterRelation: string;
-  initialEvidenceType: string;
-  initialSourceRef: string;
-  initialEvidenceDescription: string;
-}): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.createLegacyVault, [
-    input.vaultId,
-    input.personName,
-    input.lifePeriod,
-    input.identityLine,
-    input.initialClaim,
-    input.submitterRelation,
-    input.initialEvidenceType,
-    input.initialSourceRef,
-    input.initialEvidenceDescription,
-  ]);
+export async function createLegacyVault(
+  input: {
+    vaultId: string;
+    personName: string;
+    lifePeriod: string;
+    identityLine: string;
+    initialClaim: string;
+    submitterRelation: string;
+    initialEvidenceType: string;
+    initialSourceRef: string;
+    initialEvidenceDescription: string;
+  },
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(
+    CONTRACT_METHODS.createLegacyVault,
+    [
+      input.vaultId,
+      input.personName,
+      input.lifePeriod,
+      input.identityLine,
+      input.initialClaim,
+      input.submitterRelation,
+      input.initialEvidenceType,
+      input.initialSourceRef,
+      input.initialEvidenceDescription,
+    ],
+    onSubmitted
+  );
 }
 
-export async function submitEvidence(input: {
-  vaultId: string;
-  shardId: string;
-  evidenceType: string;
-  sourceRef: string;
-  claimSupported: string;
-  description: string;
-  credibilityHint: string;
-}): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.submitEvidence, [
-    input.vaultId,
-    input.shardId,
-    input.evidenceType,
-    input.sourceRef,
-    input.claimSupported,
-    input.description,
-    input.credibilityHint,
-  ]);
+export async function submitEvidence(
+  input: {
+    vaultId: string;
+    shardId: string;
+    evidenceType: string;
+    sourceRef: string;
+    claimSupported: string;
+    description: string;
+    credibilityHint: string;
+  },
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(
+    CONTRACT_METHODS.submitEvidence,
+    [
+      input.vaultId,
+      input.shardId,
+      input.evidenceType,
+      input.sourceRef,
+      input.claimSupported,
+      input.description,
+      input.credibilityHint,
+    ],
+    onSubmitted
+  );
 }
 
-export async function submitMemory(input: {
-  vaultId: string;
-  memoryId: string;
-  relationship: string;
-  memoryText: string;
-  context: string;
-}): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.submitMemory, [
-    input.vaultId,
-    input.memoryId,
-    input.relationship,
-    input.memoryText,
-    input.context,
-  ]);
+export async function submitMemory(
+  input: {
+    vaultId: string;
+    memoryId: string;
+    relationship: string;
+    memoryText: string;
+    context: string;
+  },
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(
+    CONTRACT_METHODS.submitMemory,
+    [input.vaultId, input.memoryId, input.relationship, input.memoryText, input.context],
+    onSubmitted
+  );
 }
 
-export async function requestLegacyInscription(vaultId: string): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.requestLegacyInscription, [vaultId]);
+export async function requestLegacyInscription(
+  vaultId: string,
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(CONTRACT_METHODS.requestLegacyInscription, [vaultId], onSubmitted);
 }
 
-export async function openFracture(input: {
-  vaultId: string;
-  fractureId: string;
-  fractureType: string;
-  targetType: string;
-  targetId: string;
-  claim: string;
-  evidenceRef: string;
-}): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.openFracture, [
-    input.vaultId,
-    input.fractureId,
-    input.fractureType,
-    input.targetType,
-    input.targetId,
-    input.claim,
-    input.evidenceRef,
-  ]);
+export async function openFracture(
+  input: {
+    vaultId: string;
+    fractureId: string;
+    fractureType: string;
+    targetType: string;
+    targetId: string;
+    claim: string;
+    evidenceRef: string;
+  },
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(
+    CONTRACT_METHODS.openFracture,
+    [
+      input.vaultId,
+      input.fractureId,
+      input.fractureType,
+      input.targetType,
+      input.targetId,
+      input.claim,
+      input.evidenceRef,
+    ],
+    onSubmitted
+  );
 }
 
-export async function resolveFracture(fractureId: string): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.resolveFracture, [fractureId]);
+export async function resolveFracture(
+  fractureId: string,
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(CONTRACT_METHODS.resolveFracture, [fractureId], onSubmitted);
 }
 
-export async function sealVault(vaultId: string): Promise<WriteResult> {
-  return write(CONTRACT_METHODS.sealVault, [vaultId]);
+export async function sealVault(
+  vaultId: string,
+  onSubmitted?: (txHash: string) => void
+): Promise<WriteResult> {
+  return write(CONTRACT_METHODS.sealVault, [vaultId], onSubmitted);
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────

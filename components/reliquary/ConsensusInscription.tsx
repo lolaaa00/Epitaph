@@ -6,6 +6,7 @@ import { requestLegacyInscription } from "@/lib/contract";
 import type { LegacyVault, LegacyInscription as LegacyInscriptionT } from "@/lib/formatters";
 import { LegacyInscription } from "./LegacyInscription";
 import { TxHashLink } from "@/components/chain/TxHashLink";
+import { ConsensusProgress } from "@/components/chain/ConsensusProgress";
 
 export function ConsensusInscription({
   vault,
@@ -20,6 +21,7 @@ export function ConsensusInscription({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
 
   const canRequest =
     !vault.sealed &&
@@ -35,13 +37,15 @@ export function ConsensusInscription({
     }
     try {
       setBusy(true);
-      const result = await requestLegacyInscription(vault.vaultId);
+      setPendingHash(null);
+      const result = await requestLegacyInscription(vault.vaultId, (hash) => setPendingHash(hash));
       setTxHash(result.txHash);
       onRequested?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Consensus request failed.");
     } finally {
       setBusy(false);
+      setPendingHash(null);
     }
   }
 
@@ -79,11 +83,16 @@ export function ConsensusInscription({
       </div>
 
       {error && (
-        <p className="font-mono text-xs text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-3 py-2">
+        <p
+          role="alert"
+          className="font-mono text-xs text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-3 py-2"
+        >
           {error}
         </p>
       )}
-      {txHash && <TxHashLink hash={txHash} label="Consensus Requested ·" />}
+
+      {busy && <ConsensusProgress txHash={pendingHash} />}
+      {!busy && txHash && <TxHashLink hash={txHash} label="Consensus Requested ·" />}
 
       <LegacyInscription inscription={inscription} />
     </div>

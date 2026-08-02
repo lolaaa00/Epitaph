@@ -39,7 +39,7 @@ export default function TransactionPage() {
       </a>
 
       {error && (
-        <p className="font-mono text-sm text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-4 py-3">
+        <p role="alert" className="font-mono text-sm text-rust-2 border border-rust-2/30 bg-rust-2/5 rounded-sm px-4 py-3">
           {error}
         </p>
       )}
