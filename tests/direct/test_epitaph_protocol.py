@@ -13,7 +13,12 @@ import pytest
 CONTRACT_PATH = "contracts/EpitaphLegacyProtocol.py"
 
 
-def _open_vault(vm, deploy, vault_id="v1", **overrides):
+def _open_vault(vm, deploy, vault_id="v1", corroborate=True, **overrides):
+    """Opens a vault. By default also registers a mock_web response for the
+    default source_ref so the vault's evidence is contract-corroborated —
+    matching the assumption most of these tests make about unclamped
+    confidence. Pass corroborate=False to test the uncorroborated path
+    (deterministic confidence cap / PRESERVE downgrade / seal block)."""
     contract = deploy(CONTRACT_PATH)
     args = dict(
         vault_id=vault_id,
@@ -27,6 +32,8 @@ def _open_vault(vm, deploy, vault_id="v1", **overrides):
         initial_evidence_description="Some description of the initial evidence.",
     )
     args.update(overrides)
+    if corroborate:
+        vm.mock_web(r"https://example\.com/source", {"status": 200, "body": b"Confirmed."})
     contract.create_legacy_vault(**args)
     return contract
 
@@ -567,3 +574,129 @@ def test_protocol_events_recorded_for_vault_creation(direct_vm, direct_deploy):
     assert count >= 2  # VAULT_CREATED + EVIDENCE_SUBMITTED
     first = contract.get_protocol_event(index=0)
     assert first.event_type == "VAULT_CREATED"
+
+
+# ── Deterministic corroboration gating ──────────────────────────────────
+# These cover the team's review note: validators were judging submitted
+# source references without fetching or authenticating them, and high
+# confidence / sealing should be reserved for corroborated evidence. The
+# fix must be enforced in contract code, not merely requested of the model.
+
+def test_inscription_with_zero_corroboration_clamps_confidence_and_downgrades_preserve(
+    direct_vm, direct_deploy
+):
+    contract = _open_vault(direct_vm, direct_deploy, corroborate=False)
+    direct_vm.mock_llm(
+        r"evaluating a public memory record",
+        # Model claims high confidence and an unqualified PRESERVE despite
+        # nothing having been contract-corroborated (the fetch will 404).
+        '{"legacy_summary": "s", "contribution_assessment": "a", '
+        '"historical_profile": "p", "impact_score": 80, '
+        '"memory_confidence": 90, "controversy_level": "LOW", '
+        '"preservation_recommendation": "PRESERVE", "contested_lines": "", '
+        '"reasoning_summary": "r"}',
+    )
+    direct_vm.mock_web(r"https://example\.com/source", {"status": 404, "body": b""})
+    contract.request_legacy_inscription(vault_id="v1")
+
+    vault = contract.get_vault("v1")
+    # impact_score is not corroboration-gated — only confidence and the
+    # unqualified PRESERVE recommendation are.
+    assert int(vault.impact_score) == 80
+    assert int(vault.memory_confidence) == 40  # clamped from 90
+    assert vault.state == "INSCRIBED"
+
+    inscription = contract.get_latest_inscription("v1")
+    assert inscription.preservation_recommendation == "PRESERVE_WITH_CONTEXT"
+    assert int(inscription.corroborated_source_count) == 0
+
+
+def test_inscription_with_corroboration_does_not_clamp(direct_vm, direct_deploy):
+    contract = _open_vault(direct_vm, direct_deploy, corroborate=True)
+    direct_vm.mock_llm(
+        r"evaluating a public memory record",
+        '{"legacy_summary": "s", "contribution_assessment": "a", '
+        '"historical_profile": "p", "impact_score": 80, '
+        '"memory_confidence": 90, "controversy_level": "LOW", '
+        '"preservation_recommendation": "PRESERVE", "contested_lines": "", '
+        '"reasoning_summary": "r"}',
+    )
+    contract.request_legacy_inscription(vault_id="v1")
+
+    vault = contract.get_vault("v1")
+    assert int(vault.memory_confidence) == 90  # not clamped — was corroborated
+    inscription = contract.get_latest_inscription("v1")
+    assert inscription.preservation_recommendation == "PRESERVE"  # not downgraded
+    assert int(inscription.corroborated_source_count) == 1
+
+
+def test_seal_vault_blocked_without_corroborated_evidence(direct_vm, direct_deploy):
+    contract = _open_vault(direct_vm, direct_deploy, corroborate=False)
+    direct_vm.mock_llm(
+        r"evaluating a public memory record",
+        '{"legacy_summary": "s", "contribution_assessment": "a", '
+        '"historical_profile": "p", "impact_score": 50, '
+        '"memory_confidence": 50, "controversy_level": "LOW", '
+        '"preservation_recommendation": "PRESERVE_WITH_CONTEXT", '
+        '"contested_lines": "", "reasoning_summary": "r"}',
+    )
+    direct_vm.mock_web(r"https://example\.com/source", {"status": 500, "body": b""})
+    contract.request_legacy_inscription(vault_id="v1")
+    vault = contract.get_vault("v1")
+    assert vault.state == "INSCRIBED"  # inscribed, but on uncorroborated evidence
+
+    with direct_vm.expect_revert():
+        contract.seal_vault(vault_id="v1")
+
+
+def test_seal_vault_succeeds_with_corroborated_evidence(direct_vm, direct_deploy):
+    contract = _open_vault(direct_vm, direct_deploy, corroborate=True)
+    direct_vm.mock_llm(
+        r"evaluating a public memory record",
+        '{"legacy_summary": "s", "contribution_assessment": "a", '
+        '"historical_profile": "p", "impact_score": 50, '
+        '"memory_confidence": 50, "controversy_level": "LOW", '
+        '"preservation_recommendation": "PRESERVE", "contested_lines": "", '
+        '"reasoning_summary": "r"}',
+    )
+    contract.request_legacy_inscription(vault_id="v1")
+    contract.seal_vault(vault_id="v1")
+    vault = contract.get_vault("v1")
+    assert vault.state == "SEALED"
+    assert vault.sealed is True
+
+
+def test_fracture_resolution_with_zero_corroboration_clamps_confidence(direct_vm, direct_deploy):
+    contract = _open_vault(direct_vm, direct_deploy, corroborate=True)
+    direct_vm.mock_llm(
+        r"evaluating a public memory record",
+        '{"legacy_summary": "s", "contribution_assessment": "a", '
+        '"historical_profile": "p", "impact_score": 50, '
+        '"memory_confidence": 60, "controversy_level": "LOW", '
+        '"preservation_recommendation": "PRESERVE", "contested_lines": "", '
+        '"reasoning_summary": "r"}',
+    )
+    contract.request_legacy_inscription(vault_id="v1")
+    vault = contract.get_vault("v1")
+    assert int(vault.memory_confidence) == 60  # corroborated inscription, unclamped
+
+    contract.open_fracture(
+        vault_id="v1", fracture_id="f1", fracture_type="SOURCE_CREDIBILITY",
+        target_type="INSCRIPTION", target_id="v1-INS-1",
+        claim="The cited source no longer supports this claim.", evidence_ref="",
+    )
+    # Break corroboration for the resolution round specifically.
+    direct_vm.clear_mocks()
+    direct_vm.mock_web(r"https://example\.com/source", {"status": 410, "body": b""})
+    direct_vm.mock_llm(
+        r"adjudicating a dispute",
+        '{"resolution": "MARK_CONTESTED", "resolution_summary": "source now dead", '
+        '"revised_legacy_summary": "", "impact_score_delta": 0, '
+        '"confidence_delta": 10, "new_controversy_level": "MEDIUM"}',
+    )
+    contract.resolve_fracture(fracture_id="f1")
+
+    vault = contract.get_vault("v1")
+    # Even though confidence_delta was +10 (would be 70), zero corroboration
+    # on this round caps the result at MAX_UNCORROBORATED_CONFIDENCE (40).
+    assert int(vault.memory_confidence) == 40

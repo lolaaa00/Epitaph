@@ -98,4 +98,50 @@ console.log(`  fracture.status = ${fracture.status}, resolution = ${fracture.res
 const finalVault = await client.readContract({ address, functionName: "get_vault", args: [vaultId] });
 console.log(`  final vault.state = ${finalVault.state}`);
 
-console.log("\nAll live writes and both consensus rounds completed without error.");
+console.log("5. Sealing the vault (requires a corroborated inscription)...");
+tx = await client.writeContract({ address, functionName: "seal_vault", args: [vaultId], value: 0n });
+await waitFor(tx, "seal_vault");
+const sealedVault = await client.readContract({ address, functionName: "get_vault", args: [vaultId] });
+console.log(`  sealed vault.state = ${sealedVault.state}, sealed = ${sealedVault.sealed}`);
+
+const latestInscription = await client.readContract({
+  address, functionName: "get_latest_inscription", args: [vaultId],
+});
+console.log(`  latest_inscription.corroborated_source_count = ${latestInscription.corroborated_source_count}`);
+
+console.log("\n6. Negative control: proving the seal gate actually blocks uncorroborated vaults...");
+const badVaultId = `${vaultId}-uncorroborated`;
+tx = await client.writeContract({
+  address,
+  functionName: "create_legacy_vault",
+  args: [
+    badVaultId,
+    "Uncorroborated Test Person",
+    "", "a subject with a source_ref that cannot be fetched",
+    "This claim exists solely to prove sealing is blocked without corroboration.",
+    "verification script",
+    "OTHER",
+    "https://this-domain-does-not-exist-epitaph-test.invalid/nothing",
+    "A deliberately unfetchable source reference.",
+  ],
+  value: 0n,
+});
+await waitFor(tx, "create_legacy_vault (uncorroborated)");
+tx = await client.writeContract({
+  address, functionName: "request_legacy_inscription", args: [badVaultId], value: 0n,
+});
+await waitFor(tx, "request_legacy_inscription (uncorroborated)");
+const badInscription = await client.readContract({
+  address, functionName: "get_latest_inscription", args: [badVaultId],
+});
+console.log(`  corroborated_source_count = ${badInscription.corroborated_source_count}, memory_confidence = ${badInscription.memory_confidence}, preservation = ${badInscription.preservation_recommendation}`);
+try {
+  tx = await client.writeContract({ address, functionName: "seal_vault", args: [badVaultId], value: 0n });
+  const receipt = await client.waitForTransactionReceipt({ hash: tx, interval: 5000, retries: 100 });
+  const failed = (receipt.consensus_data?.leader_receipt ?? []).some(r => r.execution_result && r.execution_result !== "SUCCESS");
+  console.log(failed ? "  seal_vault correctly REJECTED on-chain (execution_result != SUCCESS)." : "  UNEXPECTED: seal_vault succeeded without corroboration.");
+} catch (err) {
+  console.log(`  seal_vault correctly rejected: ${err.message || err}`);
+}
+
+console.log("\nAll live writes and consensus rounds completed as expected.");

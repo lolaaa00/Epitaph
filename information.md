@@ -256,6 +256,83 @@ Two smaller hardening fixes went in alongside it:
    address; a fresh production deployment was published and confirmed to
    serve the new address with zero references to either retired address.
 
+---
+
+## 9. Third Redeploy — Deterministic Corroboration Gating
+
+The project scored 340 points, with this feedback:
+
+> The main thing holding this back is that validators permanently judge
+> user-submitted source references without fetching or authenticating them.
+> For a stronger version, retrieve supported sources during consensus and
+> reserve high confidence or sealing for corroborated evidence.
+
+This is a sharper version of the same concern §8 addressed: §8 made the
+contract *fetch* source references, but only fed the result into the
+prompt as context — the model was *asked* to weigh corroboration more
+heavily, with nothing in the contract actually enforcing it. A model can
+ignore that instruction. This round makes corroboration **load-bearing in
+contract code**, not merely advisory in a prompt.
+
+**What changed:**
+
+- `gl.nondet.web.get` results are now counted (HTTP 2xx = corroborated)
+  *inside* the leader closure, so the count is itself subject to the same
+  equivalence-principle consensus as everything else (validators must
+  agree on "zero vs. at least one corroborated source," tolerating
+  transient per-validator fetch flakiness without treating it as
+  disagreement).
+- Added `corroborated_source_count: u32` to `LegacyInscription`.
+- **Deterministic, unconditional enforcement** after consensus resolves:
+  - `memory_confidence` is capped at `MAX_UNCORROBORATED_CONFIDENCE` (40)
+    whenever nothing was corroborated, regardless of the model's returned
+    value.
+  - An unqualified `PRESERVE` recommendation is downgraded to
+    `PRESERVE_WITH_CONTEXT` under the same condition.
+  - `seal_vault` now reverts outright unless the vault's latest inscription
+    has `corroborated_source_count > 0` — a vault built entirely on
+    submitter-asserted, unverified claims can never be made permanent.
+- Both consensus flows are covered independently: `resolve_fracture`
+  computes and applies its own `corroborated_source_count`, so a dispute
+  resolved without successfully re-fetching anything is capped the same
+  way a fresh inscription would be.
+
+**Current deployed address:** `0xB2F4686a3B637E817833369a299b748D8920bE68`
+(supersedes `0x1320efcEed8c325E432d24CA40A0835B742e87af`, which supersedes
+`0x718383c99e06b411a08FFffAdF5429477477fA5B`, which supersedes
+`0x842d0bF4154053FE30fe330d3E1ffaf5eF7A8819` — all three retired).
+
+**Verification performed, in order:**
+
+1. `python3 -m py_compile` — syntax clean.
+2. Test suite grown from 33 to 38 direct-mode tests: the 5 new tests
+   explicitly prove the gate — zero-corroboration clamps confidence and
+   downgrades `PRESERVE`; corroborated evidence does not clamp; `seal_vault`
+   reverts without corroboration; `seal_vault` succeeds with it; a fracture
+   resolution round with zero corroboration clamps the vault's resulting
+   confidence even when the model's own `confidence_delta` would have
+   pushed it higher. All 38 passing, actually executed
+   (`tests/direct/test_epitaph_protocol.py`).
+3. Deployed via `genlayer deploy` — 5/5 validators voted `AGREE`,
+   `result_name: MAJORITY_AGREE`, `status_name: ACCEPTED`.
+4. `scripts/verify-schema.mjs` against the new address — all 21 frontend
+   call sites match the live schema exactly.
+5. `scripts/live-verify.mjs` extended with a **live negative control**,
+   executed against real Studio consensus (not mocked): a corroborated
+   vault sealed successfully (`corroborated_source_count = 1`); a second,
+   deliberately uncorroborated vault (an unfetchable `.invalid` domain)
+   reached `corroborated_source_count = 0`, and its `seal_vault`
+   transaction was **rejected on-chain** — `execution_result != SUCCESS` —
+   independent of anything the model returned. Full transcript in
+   `README.md`.
+6. `.env.local`, the Vercel production environment variable, and the
+   README's "Deployed contract" section and full results transcript were
+   all updated to the new address; a fresh production deployment was
+   published and confirmed to serve the new address with zero references
+   to any of the three retired addresses.
+
+---
+
 Full technical writeup, including the quoted equivalence-principle prose
 and the architecture rationale, is in `README.md`. The idea-selection
 rationale and an honest self-audit of what this project does and doesn't

@@ -204,6 +204,13 @@ def _parse_model_json(result) -> dict:
 MAX_FETCH_TARGETS = 3
 MAX_FETCH_EXCERPT_CHARS = 500
 
+# Deterministic ceiling on memory_confidence when zero source references were
+# successfully corroborated by the contract's own fetch. This is enforced in
+# contract code, not merely requested in the prompt: an LLM can be asked to
+# weigh unverified claims conservatively, but it cannot be trusted to always
+# comply, so the cap is applied unconditionally after the model responds.
+MAX_UNCORROBORATED_CONFIDENCE = 40
+
 
 def _is_fetchable_url(ref: str) -> bool:
     lowered = ref.strip().lower()
@@ -280,6 +287,7 @@ class LegacyInscription:
     reasoning_summary: str
     created_at: u64
     supersedes_inscription_id: str
+    corroborated_source_count: u32
 
 
 @allow_storage
@@ -639,12 +647,15 @@ class EpitaphLegacyProtocol(gl.Contract):
             # non-deterministic operation and must be re-executed by every
             # validator, exactly like the prompt call below.
             fetch_lines = []
+            corroborated_count = 0
             for shard_id, url in fetch_targets:
                 try:
                     resp = gl.nondet.web.get(url)
                     excerpt = ""
                     if resp.body:
                         excerpt = resp.body.decode("utf-8", errors="replace")[:MAX_FETCH_EXCERPT_CHARS]
+                    if 200 <= int(resp.status) < 300:
+                        corroborated_count += 1
                     fetch_lines.append(
                         f'- FETCHED {url} (shard {shard_id}): http_status={resp.status} excerpt="{excerpt}"'
                     )
@@ -708,7 +719,12 @@ packet. Do not contradict the submitted evidence packet. Respond with only
 the JSON object, no markdown fences, no commentary.
 """.strip()
             result = gl.nondet.exec_prompt(prompt, response_format="json")
-            return _parse_model_json(result)
+            parsed = _parse_model_json(result)
+            # corroborated_source_count is computed by the contract from its
+            # own fetch results, never asked of or supplied by the model —
+            # it cannot be inflated by an LLM's response.
+            parsed["corroborated_source_count"] = corroborated_count
+            return parsed
 
         principle = (
             "Two interpretations of the same legacy evidence packet are "
@@ -722,9 +738,15 @@ the JSON object, no markdown fences, no commentary.
             "factors; (6) neither summary invents a major achievement, "
             "credential, or harmful allegation that is absent from the "
             "evidence packet; (7) neither summary contradicts the submitted "
-            "evidence packet. Differences in wording, tone, or sentence "
-            "structure must NOT cause disagreement. Do not require the JSON "
-            "outputs to be textually identical."
+            "evidence packet; (8) corroborated_source_count is either equal "
+            "on both sides, or both sides are non-zero — transient fetch "
+            "failures on a single validator run should not by themselves "
+            "cause disagreement, but one run finding zero corroborated "
+            "sources while another finds at least one is a genuine "
+            "disagreement about the evidentiary basis. Differences in "
+            "wording, tone, or sentence structure must NOT cause "
+            "disagreement. Do not require the JSON outputs to be textually "
+            "identical."
         )
 
         raw = gl.eq_principle.prompt_comparative(call_validators, principle)
@@ -746,6 +768,19 @@ the JSON object, no markdown fences, no commentary.
 
         impact_score = _clamp_int(raw.get("impact_score"), 0, 100, 0)
         memory_confidence = _clamp_int(raw.get("memory_confidence"), 0, 100, 0)
+        corroborated_source_count = _clamp_int(
+            raw.get("corroborated_source_count"), 0, MAX_FETCH_TARGETS, 0
+        )
+
+        # Deterministic enforcement, not merely requested of the model: an
+        # inscription with zero contract-corroborated sources can never
+        # carry high confidence or an unqualified PRESERVE recommendation,
+        # regardless of what the model returned. This is what makes
+        # corroboration load-bearing rather than advisory.
+        if corroborated_source_count == 0:
+            memory_confidence = min(memory_confidence, MAX_UNCORROBORATED_CONFIDENCE)
+            if preservation == "PRESERVE":
+                preservation = "PRESERVE_WITH_CONTEXT"
 
         legacy_summary = _optional_bounded(
             str(raw.get("legacy_summary", "")), MAX_SUMMARY_CHARS, "legacy_summary"
@@ -782,6 +817,7 @@ the JSON object, no markdown fences, no commentary.
             reasoning_summary=reasoning_summary,
             created_at=self._tick(),
             supersedes_inscription_id=vault.latest_inscription_id,
+            corroborated_source_count=u32(corroborated_source_count),
         )
         self.inscriptions[inscription_id] = inscription
         vault.latest_inscription_id = inscription_id
@@ -796,7 +832,8 @@ the JSON object, no markdown fences, no commentary.
 
         self._emit(
             "INSCRIBED", vault_id, inscription_id,
-            f"{preservation} · impact {impact_score} · confidence {memory_confidence}",
+            f"{preservation} · impact {impact_score} · confidence {memory_confidence} · "
+            f"corroborated {corroborated_source_count}",
         )
 
     @gl.public.write
@@ -863,12 +900,15 @@ the JSON object, no markdown fences, no commentary.
 
         def call_validators() -> dict:
             fetch_lines = []
+            corroborated_count = 0
             for shard_id, url in fetch_targets:
                 try:
                     resp = gl.nondet.web.get(url)
                     excerpt = ""
                     if resp.body:
                         excerpt = resp.body.decode("utf-8", errors="replace")[:MAX_FETCH_EXCERPT_CHARS]
+                    if 200 <= int(resp.status) < 300:
+                        corroborated_count += 1
                     fetch_lines.append(
                         f'- FETCHED {url} (ref {shard_id}): http_status={resp.status} excerpt="{excerpt}"'
                     )
@@ -923,7 +963,9 @@ contested claim. A failed fetch on either side is unverified, never proof.
 Respond with only the JSON object, no markdown fences, no commentary.
 """.strip()
             result = gl.nondet.exec_prompt(prompt, response_format="json")
-            return _parse_model_json(result)
+            parsed = _parse_model_json(result)
+            parsed["corroborated_source_count"] = corroborated_count
+            return parsed
 
         principle = (
             "Two adjudications of the same fracture are equivalent only if: "
@@ -933,10 +975,11 @@ Respond with only the JSON object, no markdown fences, no commentary.
             "neutral); (3) confidence_delta has the same sign under the "
             "same tolerance; (4) the legacies agree on whether the record "
             "becomes more contested, less contested, or unchanged in "
-            "controversy_level direction. Exact wording of "
-            "resolution_summary or revised_legacy_summary must NOT be "
-            "required to match. Do not require the JSON outputs to be "
-            "textually identical."
+            "controversy_level direction; (5) corroborated_source_count is "
+            "either equal on both sides, or both sides are non-zero. Exact "
+            "wording of resolution_summary or revised_legacy_summary must "
+            "NOT be required to match. Do not require the JSON outputs to "
+            "be textually identical."
         )
 
         raw = gl.eq_principle.prompt_comparative(call_validators, principle)
@@ -964,6 +1007,9 @@ Respond with only the JSON object, no markdown fences, no commentary.
         new_controversy = str(raw.get("new_controversy_level", "")).strip().upper()
         if new_controversy not in CONTROVERSY_LEVELS:
             new_controversy = vault.controversy_level
+        corroborated_source_count = _clamp_int(
+            raw.get("corroborated_source_count"), 0, MAX_FETCH_TARGETS, 0
+        )
 
         fracture.status = "RESOLVED"
         fracture.resolution = resolution
@@ -971,13 +1017,21 @@ Respond with only the JSON object, no markdown fences, no commentary.
         fracture.resolved_at = self._tick()
 
         vault.impact_score = u32(max(0, min(100, int(vault.impact_score) + impact_delta)))
-        vault.memory_confidence = u32(
-            max(0, min(100, int(vault.memory_confidence) + confidence_delta))
-        )
+        new_confidence = max(0, min(100, int(vault.memory_confidence) + confidence_delta))
+        # Same deterministic rule as inscription: this fracture's own
+        # resolution cannot leave the vault with high confidence if nothing
+        # was corroborated during its adjudication, regardless of what the
+        # model's confidence_delta implied.
+        if corroborated_source_count == 0:
+            new_confidence = min(new_confidence, MAX_UNCORROBORATED_CONFIDENCE)
+        vault.memory_confidence = u32(new_confidence)
         vault.controversy_level = new_controversy
 
         latest_inscription = self.inscriptions.get(vault.latest_inscription_id)
         if latest_inscription is not None and revised_summary:
+            revised_preservation = latest_inscription.preservation_recommendation
+            if corroborated_source_count == 0 and revised_preservation == "PRESERVE":
+                revised_preservation = "PRESERVE_WITH_CONTEXT"
             next_count = int(self.inscription_count_by_vault.get(vault.vault_id, u32(0))) + 1
             self.inscription_count_by_vault[vault.vault_id] = u32(next_count)
             new_inscription_id = f"{vault.vault_id}-INS-{next_count}"
@@ -990,11 +1044,12 @@ Respond with only the JSON object, no markdown fences, no commentary.
                 impact_score=vault.impact_score,
                 memory_confidence=vault.memory_confidence,
                 controversy_level=new_controversy,
-                preservation_recommendation=latest_inscription.preservation_recommendation,
+                preservation_recommendation=revised_preservation,
                 contested_lines=resolution_summary,
                 reasoning_summary=f"Revised following fracture {fracture.fracture_id}: {resolution_summary}",
                 created_at=self._tick(),
                 supersedes_inscription_id=latest_inscription.inscription_id,
+                corroborated_source_count=u32(corroborated_source_count),
             )
             self.inscriptions[new_inscription_id] = revised
             vault.latest_inscription_id = new_inscription_id
@@ -1034,6 +1089,14 @@ Respond with only the JSON object, no markdown fences, no commentary.
         )
         if open_fracture_exists:
             raise gl.vm.UserError("vault cannot be sealed while a fracture is open")
+
+        latest_inscription = self.inscriptions.get(vault.latest_inscription_id)
+        if latest_inscription is None or int(latest_inscription.corroborated_source_count) == 0:
+            raise gl.vm.UserError(
+                "vault cannot be sealed on submitter-asserted evidence alone; "
+                "at least one source_ref must be independently corroborated "
+                "by the contract's own fetch before a record is made permanent"
+            )
 
         vault.sealed = True
         vault.state = "SEALED"

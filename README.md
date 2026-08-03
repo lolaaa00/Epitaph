@@ -151,10 +151,10 @@ in this pass; injected-wallet support was hardened instead.
 
 ## Deployed contract
 
-- **Contract address:** `0x1320efcEed8c325E432d24CA40A0835B742e87af`
+- **Contract address:** `0xB2F4686a3B637E817833369a299b748D8920bE68`
 - **Network:** GenLayer Studio Network, chain `61999`
 - **RPC:** `https://studio.genlayer.com/api`
-- **Explorer:** https://explorer-studio.genlayer.com/address/0x1320efcEed8c325E432d24CA40A0835B742e87af
+- **Explorer:** https://explorer-studio.genlayer.com/address/0xB2F4686a3B637E817833369a299b748D8920bE68
 - **Live app:** https://epitaph-two.vercel.app
 
 ## Setup
@@ -171,7 +171,7 @@ Studio automatically.
 ### Environment variables
 
 ```bash
-NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS=0x1320efcEed8c325E432d24CA40A0835B742e87af
+NEXT_PUBLIC_EPITAPH_CONTRACT_ADDRESS=0xB2F4686a3B637E817833369a299b748D8920bE68
 ```
 
 The only environment variable the app reads (verified by grepping the
@@ -204,57 +204,119 @@ substitute that exercises the same real-network path.
 
 ## Measured real results
 
-**Direct-mode tests:** 33/33 passing (`pytest tests/direct/ -v`), covering
+**Direct-mode tests:** 38/38 passing (`pytest tests/direct/ -v`), covering
 vault creation validation (bounds, enum checks, injection-phrase rejection,
 duplicate IDs), evidence/memory submission, both consensus methods
 (including malformed/fenced-markdown/commentary-wrapped model output
 recovery, fetch-success and fetch-failure paths), fracture lifecycle,
-abstention states, and read-path bounds checking. One of these tests
-initially failed during development because of a test-authoring mistake
-(two `mock_llm` registrations using an identical wildcard pattern, so the
-second silently never took effect) — not a contract bug; documented in the
-test file itself as a note for anyone extending the suite.
+abstention states, read-path bounds checking, and deterministic
+corroboration gating (confidence clamping, PRESERVE downgrade, and the
+`seal_vault` corroboration requirement — see below). One test initially
+failed during development because of a test-authoring mistake (two
+`mock_llm` registrations using an identical wildcard pattern, so the second
+silently never took effect) — not a contract bug; documented in the test
+file itself as a note for anyone extending the suite.
 
 **Schema verification:** all 21 frontend call sites (7 writes, 14 reads)
 match the live deployed contract's actual schema (`npm run verify-schema`).
 
 **Live end-to-end run** against the currently deployed contract
-(`node scripts/live-verify.mjs 0x1320efcEed8c325E432d24CA40A0835B742e87af`),
+(`node scripts/live-verify.mjs 0xB2F4686a3B637E817833369a299b748D8920bE68`),
 full transcript:
 
 ```
 1. Creating vault with a real fetchable source_ref...
-  tx (create_legacy_vault): 0x53596078adf48abe884d3c21377084abd08c959a0400f66fc1ca642a4a7ca17b
+  tx (create_legacy_vault): 0x1ffbf7f2c84b5ceb75d416f594771e9f009f6abb04df83e80961179a11471a9e
   status: ACCEPTED
 2. Requesting legacy inscription (exercises gl.nondet.web.get + _parse_model_json + gl.vm.UserError paths)...
-  tx (request_legacy_inscription): 0x7408b91925270fa241027603e9ad8ec1537cbe3973ed5bffdca96815fda3fec5
+  tx (request_legacy_inscription): 0xd056c43e44b1444c906f7e314dd8c9c3cfe0e57f230054f52c89c2fbeed796e1
   status: ACCEPTED
-  vault.state = INSCRIBED, impact_score = 8, memory_confidence = 72
+  vault.state = INSCRIBED, impact_score = 8, memory_confidence = 86
   preservation_recommendation = PRESERVE_WITH_CONTEXT
-  reasoning_summary = "Confidence is relatively high for the narrow claim
-    because the contract directly fetched the cited GitHub README with
-    HTTP 200, which materially strengthens verification that external
-    evidence retriev[al succeeded]..."
+  reasoning_summary = "Confidence is high for the specific technical claim
+    because the contract directly fetched the cited README successfully,
+    which materially strengthens verification of fetch functionality..."
 3. Opening a fracture against the inscription...
-  tx (open_fracture): 0x79c6d376a6bcd04cd8f25d4bf94fcc6eb684130dfcafec8320e511c58e269990
+  tx (open_fracture): 0xbc4301170aa288fcfbb82b7682ea0d6739a997d23adf2cd46d3aeb0b8d52f25e
   status: ACCEPTED
 4. Resolving the fracture (second consensus path)...
-  tx (resolve_fracture): 0xf1644520859b40cb83ecc3c7665dc43e248db39d2d2385e8d020ae01a13b3233
+  tx (resolve_fracture): 0x38239ff260f298c918fde23170f70e615489823d33bf3fb5efc5171e250c4620
   status: ACCEPTED
   fracture.status = RESOLVED, resolution = UPHOLD_ORIGINAL
   final vault.state = RECONCILED
+5. Sealing the vault (requires a corroborated inscription)...
+  tx (seal_vault): 0x401ccdcb3a366816d9d6abc1dc1de1b190c93590cf9bbf6397d609fedaaa2f62
+  status: ACCEPTED
+  sealed vault.state = SEALED, sealed = true
+  latest_inscription.corroborated_source_count = 1
+
+6. Negative control: proving the seal gate actually blocks uncorroborated vaults...
+  tx (create_legacy_vault (uncorroborated)): 0xa8b9ffecb30e035a7a85e7ff2d24ea4cf3e6ff04514715490067c8e3232c6517
+  status: ACCEPTED
+  tx (request_legacy_inscription (uncorroborated)): 0x8f3d58c155bdef42e21db46df516c2790c2489d53bea107220f80e5ecc07eeb2
+  status: ACCEPTED
+  corroborated_source_count = 0, memory_confidence = 5, preservation = INSUFFICIENT_EVIDENCE
+  seal_vault correctly REJECTED on-chain (execution_result != SUCCESS).
 ```
 
-The `reasoning_summary` there is the model's own words, generated live —
-not written by us — and it directly cites the contract-fetched HTTP 200 as
-the reason for its confidence level. That's the Gate D fix working on real
-consensus, not just in a mocked test.
+The `reasoning_summary` in step 2 is the model's own words, generated
+live — not written by us — and it directly cites the contract-fetched
+successful response as the reason for its confidence level. Steps 5–6 are
+the deterministic corroboration gate itself, proven on real network state,
+not just asserted: the corroborated vault sealed successfully; the
+uncorroborated one's `seal_vault` transaction was rejected on-chain,
+independent of anything the model said. That's the "reserve high
+confidence or sealing for corroborated evidence" requirement enforced in
+contract code, not merely requested in a prompt.
 
 Deploy itself also reached unanimous validator agreement: 5/5 votes
 `AGREE`, `result_name: MAJORITY_AGREE`, `status_name: ACCEPTED`.
 
+### How corroboration gating works
+
+`gl.nondet.web.get` fetch results are counted (HTTP 2xx = corroborated)
+*inside* the leader closure — the same non-deterministic operation that
+runs the LLM prompt — so the count is itself subject to the equivalence
+principle (validators must agree on "zero vs. at least one," tolerating
+transient per-validator fetch flakiness without treating it as
+disagreement). The resulting `corroborated_source_count` is then used
+deterministically, in plain contract code, after consensus resolves:
+
+- `memory_confidence` is capped at `MAX_UNCORROBORATED_CONFIDENCE` (40)
+  whenever nothing was corroborated, regardless of what the model returned.
+- An unqualified `PRESERVE` recommendation is downgraded to
+  `PRESERVE_WITH_CONTEXT` under the same condition.
+- `seal_vault` reverts outright unless the vault's latest inscription has
+  `corroborated_source_count > 0` — a vault built entirely on
+  submitter-asserted, unverified claims can never become permanent.
+
+This applies to both consensus flows: `request_legacy_inscription` and
+`resolve_fracture` each compute and store their own
+`corroborated_source_count` independently, so a dispute resolved without
+successfully re-fetching anything is capped the same way a fresh
+inscription would be.
+
 ## Honest limits
 
+- **`impact_score` is not corroboration-gated, only `memory_confidence`,
+  `preservation_recommendation`, and `seal_vault` are.** Impact is a
+  judgment about the *significance* of a documented life, which doesn't
+  reduce to "was a URL fetchable" the way reliability/confidence does — an
+  uncorroborated claim can still describe something genuinely significant,
+  it's the *certainty* of that claim that corroboration speaks to. This is
+  a deliberate scope decision, not an oversight, but it means a vault can
+  still show a high impact_score without any corroborated source.
+- **Corroboration only covers up to 3 http(s) `source_ref` values per
+  consensus round** (`MAX_FETCH_TARGETS`), prioritizing a fracture's own
+  `evidence_ref` when resolving a dispute. This bounds latency
+  (fetches multiply consensus round time) at the cost of not verifying
+  every piece of evidence on a heavily-documented vault in a single round;
+  subsequent rounds (e.g. a later `resolve_fracture`) can corroborate
+  different sources.
+- **Non-http(s) references (e.g. `ipfs://`) are never fetched**, by design
+  — `gl.nondet.web.get` is an HTTP client, not an IPFS gateway — and are
+  labeled as "not attempted" in the prompt rather than silently treated as
+  failed or ignored.
 - **No generated/browser-wallet fallback.** Only injected wallets are
   supported in this pass (see "The wallet model" above).
 - **`gltest`-framework integration tests did not run to completion in this
